@@ -143,3 +143,42 @@ func fetchBatchesPerBlock(ctx context.Context, client *ethclient.Client, number 
 	}
 	return validBatchCount, invalidBatchCount, nil
 }
+
+// fetchBatchesPerBlock gets a block & the parses all of the transactions in the block.
+func l1TxToFrame(tx *types.Transaction, signer types.Signer, config Config) (uint64, uint64, []derive.Frame) {
+
+	validBatchCount := uint64(0)
+	invalidBatchCount := uint64(0)
+
+	if tx.To() != nil && *tx.To() == config.BatchInbox {
+		sender, err := signer.Sender(tx)
+		if err != nil {
+			return 0, 0, nil
+		}
+		validSender := true
+		if _, ok := config.BatchSenders[sender]; !ok {
+			fmt.Printf("Found a transaction (%s) from an invalid sender (%s)\n", tx.Hash().String(), sender.String())
+			invalidBatchCount += 1
+			validSender = false
+		}
+
+		validFrames := true
+
+		frames, err := derive.ParseFrames(tx.Data())
+		if err != nil {
+			fmt.Printf("Found a transaction (%s) with invalid data: %v\n", tx.Hash().String(), err)
+			validFrames = false
+
+			return validBatchCount, invalidBatchCount, frames
+		}
+
+		if validSender && validFrames {
+			validBatchCount += 1
+		} else {
+			invalidBatchCount += 1
+		}
+
+	}
+
+	return validBatchCount, invalidBatchCount, nil
+}
