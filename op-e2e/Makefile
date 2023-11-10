@@ -21,7 +21,7 @@ test-ws: pre-test
 
 test-http: pre-test
 	OP_E2E_USE_HTTP=true $(go_test) $(go_test_flags) ./...
-.PHONY: test-ws
+.PHONY: test-http
 
 cannon-prestate:
 	make -C .. cannon-prestate
@@ -51,7 +51,3 @@ clean:
 	rm -r ../.devnet
 	rm -r ../op-program/bin
 .PHONY: clean
-
-lint:
-	golangci-lint run -E goimports,sqlclosecheck,bodyclose,asciicheck,misspell,errorlint --timeout 5m -e "errors.As" -e "errors.Is" ./...
-.PHONY: lint

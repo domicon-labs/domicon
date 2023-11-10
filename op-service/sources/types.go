@@ -1,7 +1,6 @@
 package sources
 
 import (
-	"context"
 	"fmt"
 	"math/big"
 	"strings"
@@ -17,10 +16,6 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
-
-type BatchCallContextFn func(ctx context.Context, b []rpc.BatchElem) error
-
-type CallContextFn func(ctx context.Context, result any, method string, args ...any) error
 
 // Note: these types are used, instead of the geth types, to enable:
 // - batched calls of many block requests (standard bindings do extra uncle-header fetches, cannot be batched nicely)
@@ -83,6 +78,10 @@ func (h headerInfo) GasUsed() uint64 {
 	return h.Header.GasUsed
 }
 
+func (h headerInfo) GasLimit() uint64 {
+	return h.Header.GasLimit
+}
+
 func (h headerInfo) HeaderRLP() ([]byte, error) {
 	return rlp.EncodeToBytes(h.Header)
 }
@@ -108,7 +107,16 @@ type rpcHeader struct {
 	BaseFee *hexutil.Big `json:"baseFeePerGas"`
 
 	// WithdrawalsRoot was added by EIP-4895 and is ignored in legacy headers.
-	WithdrawalsRoot *common.Hash `json:"withdrawalsRoot"`
+	WithdrawalsRoot *common.Hash `json:"withdrawalsRoot,omitempty"`
+
+	// BlobGasUsed was added by EIP-4844 and is ignored in legacy headers.
+	BlobGasUsed *hexutil.Uint64 `json:"blobGasUsed,omitempty"`
+
+	// ExcessBlobGas was added by EIP-4844 and is ignored in legacy headers.
+	ExcessBlobGas *hexutil.Uint64 `json:"excessBlobGas,omitempty"`
+
+	// ParentBeaconRoot was added by EIP-4788 and is ignored in legacy headers.
+	ParentBeaconRoot *common.Hash `json:"parentBeaconBlockRoot,omitempty"`
 
 	// untrusted info included by RPC, may have to be checked
 	Hash common.Hash `json:"hash"`
@@ -161,6 +169,10 @@ func (hdr *rpcHeader) createGethHeader() *types.Header {
 		Nonce:           hdr.Nonce,
 		BaseFee:         (*big.Int)(hdr.BaseFee),
 		WithdrawalsHash: hdr.WithdrawalsRoot,
+		// Cancun
+		BlobGasUsed:      (*uint64)(hdr.BlobGasUsed),
+		ExcessBlobGas:    (*uint64)(hdr.ExcessBlobGas),
+		ParentBeaconRoot: hdr.ParentBeaconRoot,
 	}
 }
 
@@ -181,14 +193,37 @@ func (hdr *rpcHeader) Info(trustCache bool, mustBePostMerge bool) (eth.BlockInfo
 type rpcBlock struct {
 	rpcHeader
 	Transactions []*types.Transaction `json:"transactions"`
+	Withdrawals  *types.Withdrawals   `json:"withdrawals,omitempty"`
 }
 
 func (block *rpcBlock) verify() error {
 	if computed := block.computeBlockHash(); computed != block.Hash {
 		return fmt.Errorf("failed to verify block hash: computed %s but RPC said %s", computed, block.Hash)
 	}
+	for i, tx := range block.Transactions {
+		if tx == nil {
+			return fmt.Errorf("block tx %d is nil", i)
+		}
+	}
 	if computed := types.DeriveSha(types.Transactions(block.Transactions), trie.NewStackTrie(nil)); block.TxHash != computed {
 		return fmt.Errorf("failed to verify transactions list: computed %s but RPC said %s", computed, block.TxHash)
+	}
+	if block.WithdrawalsRoot != nil {
+		if block.Withdrawals == nil {
+			return fmt.Errorf("expected withdrawals")
+		}
+		for i, w := range *block.Withdrawals {
+			if w == nil {
+				return fmt.Errorf("block withdrawal %d is null", i)
+			}
+		}
+		if computed := types.DeriveSha(*block.Withdrawals, trie.NewStackTrie(nil)); *block.WithdrawalsRoot != computed {
+			return fmt.Errorf("failed to verify withdrawals list: computed %s but RPC said %s", computed, block.WithdrawalsRoot)
+		}
+	} else {
+		if block.Withdrawals != nil {
+			return fmt.Errorf("expected no withdrawals due to missing withdrawals-root, but got %d", len(*block.Withdrawals))
+		}
 	}
 	return nil
 }
@@ -252,6 +287,7 @@ func (block *rpcBlock) ExecutionPayload(trustCache bool) (*eth.ExecutionPayload,
 		BaseFeePerGas: baseFee,
 		BlockHash:     block.Hash,
 		Transactions:  opaqueTxs,
+		Withdrawals:   block.Withdrawals,
 	}, nil
 }
 

@@ -43,10 +43,6 @@ type TxManager interface {
 	// NOTE: Send can be called concurrently, the nonce will be managed internally.
 	Send(ctx context.Context, candidate TxCandidate) (*types.Receipt, error)
 
-	// Call is used to call a contract.
-	// Internally, it uses the [ethclient.Client.CallContract] method.
-	Call(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
-
 	// From returns the sending address associated with the instance of the transaction manager.
 	// It is static for a single instance of a TxManager.
 	From() common.Address
@@ -169,12 +165,6 @@ func (m *SimpleTxManager) Send(ctx context.Context, candidate TxCandidate) (*typ
 	return receipt, err
 }
 
-// Call is used to call a contract.
-// Internally, it uses the [ethclient.Client.CallContract] method.
-func (m *SimpleTxManager) Call(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
-	return m.backend.CallContract(ctx, msg, blockNumber)
-}
-
 // send performs the actual transaction creation and sending.
 func (m *SimpleTxManager) send(ctx context.Context, candidate TxCandidate) (*types.Receipt, error) {
 	if m.cfg.TxSendTimeout != 0 {
@@ -238,23 +228,15 @@ func (m *SimpleTxManager) craftTx(ctx context.Context, candidate TxCandidate) (*
 		rawTx.Gas = gas
 	}
 
-	// Avoid bumping the nonce if the gas estimation fails.
-	nonce, err := m.nextNonce(ctx)
-	if err != nil {
-		return nil, err
-	}
-	rawTx.Nonce = nonce
-
-	ctx, cancel := context.WithTimeout(ctx, m.cfg.NetworkTimeout)
-	defer cancel()
-	return m.cfg.Signer(ctx, m.cfg.From, types.NewTx(rawTx))
+	return m.signWithNextNonce(ctx, rawTx)
 }
 
-// nextNonce returns a nonce to use for the next transaction. It uses
-// eth_getTransactionCount with "latest" once, and then subsequent calls simply
-// increment this number. If the transaction manager is reset, it will query the
-// eth_getTransactionCount nonce again.
-func (m *SimpleTxManager) nextNonce(ctx context.Context) (uint64, error) {
+// signWithNextNonce returns a signed transaction with the next available nonce.
+// The nonce is fetched once using eth_getTransactionCount with "latest", and
+// then subsequent calls simply increment this number. If the transaction manager
+// is reset, it will query the eth_getTransactionCount nonce again. If signing
+// fails, the nonce is not incremented.
+func (m *SimpleTxManager) signWithNextNonce(ctx context.Context, rawTx *types.DynamicFeeTx) (*types.Transaction, error) {
 	m.nonceLock.Lock()
 	defer m.nonceLock.Unlock()
 
@@ -265,15 +247,25 @@ func (m *SimpleTxManager) nextNonce(ctx context.Context) (uint64, error) {
 		nonce, err := m.backend.NonceAt(childCtx, m.cfg.From, nil)
 		if err != nil {
 			m.metr.RPCError()
-			return 0, fmt.Errorf("failed to get nonce: %w", err)
+			return nil, fmt.Errorf("failed to get nonce: %w", err)
 		}
 		m.nonce = &nonce
 	} else {
 		*m.nonce++
 	}
 
-	m.metr.RecordNonce(*m.nonce)
-	return *m.nonce, nil
+	rawTx.Nonce = *m.nonce
+	ctx, cancel := context.WithTimeout(ctx, m.cfg.NetworkTimeout)
+	defer cancel()
+	tx, err := m.cfg.Signer(ctx, m.cfg.From, types.NewTx(rawTx))
+	if err != nil {
+		// decrement the nonce, so we can retry signing with the same nonce next time
+		// signWithNextNonce is called
+		*m.nonce--
+	} else {
+		m.metr.RecordNonce(*m.nonce)
+	}
+	return tx, err
 }
 
 // resetNonce resets the internal nonce tracking. This is called if any pending send

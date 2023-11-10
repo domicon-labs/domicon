@@ -213,8 +213,9 @@ The RLP-encoded consensus-enforced fields are:
 - `bloom` (standard): bloom filter of the transaction logs.
 - `logs` (standard): log events emitted by the EVM processing.
 - `depositNonce` (unique extension): Optional field. The deposit transaction persists the nonce used during execution.
-  - Before Regolith, this `depositNonce` field must always be omitted.
-  - With Regolith, this `depositNonce` field must always be included.
+- `depositNonceVersion` (unique extension): Optional field. The value must be 1 if the field is present
+  - Before Canyon, these `depositNonce` & `depositNonceVersion` fields must always be omitted.
+  - With Canyon, these `depositNonce` & `depositNonceVersion` fields must always be included.
 
 Starting with Regolith, the receipt API responses utilize the receipt changes for more accurate response data:
 
@@ -308,9 +309,9 @@ A reference implementation of the L1 Attributes predeploy contract can be found 
 
 [L1Block.sol]: ../packages/contracts-bedrock/src/L2/L1Block.sol
 
-After running `pnpm build` in the `packages/contracts` directory, the bytecode to add to the genesis
-file will be located in the `deployedBytecode` field of the build artifacts file at
-`/packages/contracts/artifacts/contracts/L2/L1Block.sol/L1Block.json`.
+After running `pnpm build` in the `packages/contracts-bedrock` directory, the bytecode to add to
+the genesis file will be located in the `deployedBytecode` field of the build artifacts file at
+`/packages/contracts-bedrock/forge-artifacts/L1Block.sol/L1Block.json`.
 
 ## User-Deposited Transactions
 

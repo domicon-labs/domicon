@@ -3,7 +3,7 @@ pragma solidity ^0.8.15;
 
 import { Test } from "forge-std/Test.sol";
 import { Vm } from "forge-std/Vm.sol";
-import { DisputeGameFactory_Init } from "./DisputeGameFactory.t.sol";
+import { DisputeGameFactory_Init } from "test/DisputeGameFactory.t.sol";
 import { DisputeGameFactory } from "src/dispute/DisputeGameFactory.sol";
 import { FaultDisputeGame } from "src/dispute/FaultDisputeGame.sol";
 import { L2OutputOracle } from "src/L1/L2OutputOracle.sol";
@@ -17,6 +17,7 @@ import { Types } from "src/libraries/Types.sol";
 import { LibClock } from "src/dispute/lib/LibClock.sol";
 import { LibPosition } from "src/dispute/lib/LibPosition.sol";
 import { IBigStepper, IPreimageOracle } from "src/dispute/interfaces/IBigStepper.sol";
+import { AlphabetVM } from "test/mocks/AlphabetVM.sol";
 
 contract FaultDisputeGame_Init is DisputeGameFactory_Init {
     /// @dev The type of the game being tested.
@@ -32,15 +33,13 @@ contract FaultDisputeGame_Init is DisputeGameFactory_Init {
     event Move(uint256 indexed parentIndex, Claim indexed pivot, address indexed claimant);
 
     function init(Claim rootClaim, Claim absolutePrestate) public {
-        super.setUp();
-
         // Set the time to a realistic date.
         vm.warp(1690906994);
 
         // Propose 2 mock outputs
-        vm.startPrank(oracle.PROPOSER());
+        vm.startPrank(l2OutputOracle.PROPOSER());
         for (uint256 i; i < 2; i++) {
-            oracle.proposeL2Output(bytes32(i + 1), oracle.nextBlockNumber(), blockhash(i), i);
+            l2OutputOracle.proposeL2Output(bytes32(i + 1), l2OutputOracle.nextBlockNumber(), blockhash(i), i);
 
             // Advance 1 block
             vm.roll(block.number + 1);
@@ -53,7 +52,7 @@ contract FaultDisputeGame_Init is DisputeGameFactory_Init {
         blockOracle.checkpoint();
 
         // Set the extra data for the game creation
-        extraData = abi.encode(oracle.SUBMISSION_INTERVAL() * 2, block.number - 1);
+        extraData = abi.encode(l2OutputOracle.SUBMISSION_INTERVAL() * 2, block.number - 1);
 
         // Deploy an implementation of the fault game
         gameImpl = new FaultDisputeGame(
@@ -62,7 +61,7 @@ contract FaultDisputeGame_Init is DisputeGameFactory_Init {
             4,
             Duration.wrap(7 days),
             new AlphabetVM(absolutePrestate),
-            oracle,
+            l2OutputOracle,
             blockOracle
         );
         // Register the game implementation with the factory.
@@ -82,6 +81,7 @@ contract FaultDisputeGame_Test is FaultDisputeGame_Init {
     Claim internal constant ABSOLUTE_PRESTATE = Claim.wrap(bytes32((uint256(3) << 248) | uint256(0)));
 
     function setUp() public override {
+        super.setUp();
         super.init(ROOT_CLAIM, ABSOLUTE_PRESTATE);
     }
 
@@ -127,7 +127,7 @@ contract FaultDisputeGame_Test is FaultDisputeGame_Init {
     function test_initialize_l1HeadTooOld_reverts() public {
         // Store a mock block hash for the genesis block. The timestamp will default to 0.
         vm.store(address(gameImpl.BLOCK_ORACLE()), keccak256(abi.encode(0, 0)), bytes32(uint256(1)));
-        bytes memory _extraData = abi.encode(oracle.SUBMISSION_INTERVAL() * 2, 0);
+        bytes memory _extraData = abi.encode(l2OutputOracle.SUBMISSION_INTERVAL() * 2, 0);
 
         vm.expectRevert(L1HeadTooOld.selector);
         factory.create(GAME_TYPE, ROOT_CLAIM, _extraData);
@@ -139,8 +139,9 @@ contract FaultDisputeGame_Test is FaultDisputeGame_Init {
     ///               For now, it is critical that the first proposed output root of an OP stack
     ///               chain is done so by an honest party.
     function test_initialize_firstOutput_reverts() public {
+        uint256 submissionInterval = l2OutputOracle.submissionInterval();
         vm.expectRevert(abi.encodeWithSignature("Panic(uint256)", 0x11));
-        factory.create(GAME_TYPE, ROOT_CLAIM, abi.encode(1800, block.number - 1));
+        factory.create(GAME_TYPE, ROOT_CLAIM, abi.encode(submissionInterval, block.number - 1));
     }
 
     /// @dev Tests that the `create` function reverts when the rootClaim does not disagree with the outcome.
@@ -159,12 +160,12 @@ contract FaultDisputeGame_Test is FaultDisputeGame_Init {
         // Starting
         (FaultDisputeGame.OutputProposal memory startingProp, FaultDisputeGame.OutputProposal memory disputedProp) =
             gameProxy.proposals();
-        Types.OutputProposal memory starting = oracle.getL2Output(startingProp.index);
+        Types.OutputProposal memory starting = l2OutputOracle.getL2Output(startingProp.index);
         assertEq(startingProp.index, 0);
         assertEq(startingProp.l2BlockNumber, starting.l2BlockNumber);
         assertEq(Hash.unwrap(startingProp.outputRoot), starting.outputRoot);
         // Disputed
-        Types.OutputProposal memory disputed = oracle.getL2Output(disputedProp.index);
+        Types.OutputProposal memory disputed = l2OutputOracle.getL2Output(disputedProp.index);
         assertEq(disputedProp.index, 1);
         assertEq(disputedProp.l2BlockNumber, disputed.l2BlockNumber);
         assertEq(Hash.unwrap(disputedProp.outputRoot), disputed.outputRoot);
@@ -755,6 +756,7 @@ contract OneVsOne_Arena is FaultDisputeGame_Init {
 
 contract FaultDisputeGame_ResolvesCorrectly_IncorrectRoot1 is OneVsOne_Arena {
     function setUp() public override {
+        super.setUp();
         GamePlayer honest = new HonestPlayer(ABSOLUTE_PRESTATE);
         GamePlayer dishonest = new VariableDivergentPlayer(ABSOLUTE_PRESTATE, 16, 0);
         super.init(dishonest, honest, 15);
@@ -777,6 +779,7 @@ contract FaultDisputeGame_ResolvesCorrectly_IncorrectRoot1 is OneVsOne_Arena {
 
 contract FaultDisputeGame_ResolvesCorrectly_CorrectRoot1 is OneVsOne_Arena {
     function setUp() public override {
+        super.setUp();
         GamePlayer honest = new HonestPlayer(ABSOLUTE_PRESTATE);
         GamePlayer dishonest = new VariableDivergentPlayer(ABSOLUTE_PRESTATE, 16, 0);
         super.init(honest, dishonest, 15);
@@ -799,6 +802,7 @@ contract FaultDisputeGame_ResolvesCorrectly_CorrectRoot1 is OneVsOne_Arena {
 
 contract FaultDisputeGame_ResolvesCorrectly_IncorrectRoot2 is OneVsOne_Arena {
     function setUp() public override {
+        super.setUp();
         GamePlayer honest = new HonestPlayer(ABSOLUTE_PRESTATE);
         GamePlayer dishonest = new VariableDivergentPlayer(ABSOLUTE_PRESTATE, 16, 7);
         super.init(dishonest, honest, 15);
@@ -821,6 +825,7 @@ contract FaultDisputeGame_ResolvesCorrectly_IncorrectRoot2 is OneVsOne_Arena {
 
 contract FaultDisputeGame_ResolvesCorrectly_CorrectRoot2 is OneVsOne_Arena {
     function setUp() public override {
+        super.setUp();
         GamePlayer honest = new HonestPlayer(ABSOLUTE_PRESTATE);
         GamePlayer dishonest = new VariableDivergentPlayer(ABSOLUTE_PRESTATE, 16, 7);
         super.init(honest, dishonest, 15);
@@ -843,6 +848,7 @@ contract FaultDisputeGame_ResolvesCorrectly_CorrectRoot2 is OneVsOne_Arena {
 
 contract FaultDisputeGame_ResolvesCorrectly_IncorrectRoot3 is OneVsOne_Arena {
     function setUp() public override {
+        super.setUp();
         GamePlayer honest = new HonestPlayer(ABSOLUTE_PRESTATE);
         GamePlayer dishonest = new VariableDivergentPlayer(ABSOLUTE_PRESTATE, 16, 2);
         super.init(dishonest, honest, 15);
@@ -865,6 +871,7 @@ contract FaultDisputeGame_ResolvesCorrectly_IncorrectRoot3 is OneVsOne_Arena {
 
 contract FaultDisputeGame_ResolvesCorrectly_CorrectRoot3 is OneVsOne_Arena {
     function setUp() public override {
+        super.setUp();
         GamePlayer honest = new HonestPlayer(ABSOLUTE_PRESTATE);
         GamePlayer dishonest = new VariableDivergentPlayer(ABSOLUTE_PRESTATE, 16, 2);
         super.init(honest, dishonest, 15);
@@ -887,6 +894,7 @@ contract FaultDisputeGame_ResolvesCorrectly_CorrectRoot3 is OneVsOne_Arena {
 
 contract FaultDisputeGame_ResolvesCorrectly_IncorrectRoot4 is OneVsOne_Arena {
     function setUp() public override {
+        super.setUp();
         GamePlayer honest = new HonestPlayer_HalfTrace(ABSOLUTE_PRESTATE);
         GamePlayer dishonest = new VariableDivergentPlayer(ABSOLUTE_PRESTATE, 8, 5);
         super.init(dishonest, honest, 7);
@@ -909,6 +917,7 @@ contract FaultDisputeGame_ResolvesCorrectly_IncorrectRoot4 is OneVsOne_Arena {
 
 contract FaultDisputeGame_ResolvesCorrectly_CorrectRoot4 is OneVsOne_Arena {
     function setUp() public override {
+        super.setUp();
         GamePlayer honest = new HonestPlayer_HalfTrace(ABSOLUTE_PRESTATE);
         GamePlayer dishonest = new VariableDivergentPlayer(ABSOLUTE_PRESTATE, 8, 5);
         super.init(honest, dishonest, 7);
@@ -931,6 +940,7 @@ contract FaultDisputeGame_ResolvesCorrectly_CorrectRoot4 is OneVsOne_Arena {
 
 contract FaultDisputeGame_ResolvesCorrectly_IncorrectRoot5 is OneVsOne_Arena {
     function setUp() public override {
+        super.setUp();
         GamePlayer honest = new HonestPlayer_QuarterTrace(ABSOLUTE_PRESTATE);
         GamePlayer dishonest = new VariableDivergentPlayer(ABSOLUTE_PRESTATE, 4, 3);
         super.init(dishonest, honest, 3);
@@ -953,6 +963,7 @@ contract FaultDisputeGame_ResolvesCorrectly_IncorrectRoot5 is OneVsOne_Arena {
 
 contract FaultDisputeGame_ResolvesCorrectly_CorrectRoot5 is OneVsOne_Arena {
     function setUp() public override {
+        super.setUp();
         GamePlayer honest = new HonestPlayer_QuarterTrace(ABSOLUTE_PRESTATE);
         GamePlayer dishonest = new VariableDivergentPlayer(ABSOLUTE_PRESTATE, 4, 3);
         super.init(honest, dishonest, 3);
@@ -1082,39 +1093,5 @@ contract VariableDivergentPlayer is GamePlayer {
             _trace[i] = i >= _divergeAt ? bytes1(i) : bytes1(absolutePrestate + i + 1);
         }
         trace = _trace;
-    }
-}
-
-////////////////////////////////////////////////////////////////
-//                          MOCK VMS                          //
-////////////////////////////////////////////////////////////////
-
-contract AlphabetVM is IBigStepper {
-    Claim internal immutable ABSOLUTE_PRESTATE;
-    IPreimageOracle public oracle;
-
-    constructor(Claim _absolutePrestate) {
-        ABSOLUTE_PRESTATE = _absolutePrestate;
-        oracle = new PreimageOracle();
-    }
-
-    /// @inheritdoc IBigStepper
-    function step(bytes calldata _stateData, bytes calldata, uint256) external view returns (bytes32 postState_) {
-        uint256 traceIndex;
-        uint256 claim;
-        if ((keccak256(_stateData) << 8) == (Claim.unwrap(ABSOLUTE_PRESTATE) << 8)) {
-            // If the state data is empty, then the absolute prestate is the claim.
-            traceIndex = 0;
-            (claim) = abi.decode(_stateData, (uint256));
-        } else {
-            // Otherwise, decode the state data.
-            (traceIndex, claim) = abi.decode(_stateData, (uint256, uint256));
-            traceIndex++;
-        }
-        // STF: n -> n + 1
-        postState_ = keccak256(abi.encode(traceIndex, claim + 1));
-        assembly {
-            postState_ := or(and(postState_, not(shl(248, 0xFF))), shl(248, 1))
-        }
     }
 }

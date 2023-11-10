@@ -9,11 +9,8 @@ typechain
 coverage.out
 .resource-metering.csv
 
-# Tests
-test-case-generator/fuzz
-
 # Scripts
-scripts/differential-testing/differential-testing
+scripts/go-ffi/go-ffi
 
 # Environment Variables
 .envrc
@@ -29,3 +26,6 @@ deployments/1337
 
 # Devnet config which changes with each 'make devnet-up'
 deploy-config/devnetL1.json
+
+# Getting Started guide deploy config
+deploy-config/getting-started.json
