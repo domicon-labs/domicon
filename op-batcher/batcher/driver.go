@@ -17,8 +17,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-batcher/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
+	txmgr "github.com/ethereum-optimism/optimism/op-service/batcher-txmgr"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/txmgr"
 )
 
 var ErrBatcherNotRunning = errors.New("batcher is not running")
