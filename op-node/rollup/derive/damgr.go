@@ -173,11 +173,11 @@ func (d *DAManager) getDA() {
 		} else {
 			filteredHashes := make([]common.Hash, 0)
 			exHashes := make([]common.Hash, 0)
-			for i, exists := range data.Flags {
+			for i, flag := range data.Flags {
 				hash := block.TxHashes.TxHashes[i]
-				if exists {
+				if flag == rpc.DataState_SAVE {
 					exHashes = append(exHashes, hash)
-				} else {
+				} else if flag == rpc.DataState_UNKNOW {
 					filteredHashes = append(filteredHashes, hash)
 				}
 			}
